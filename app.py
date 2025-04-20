@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, redirect, session
 import requests
 import os
+import json
 
 app = Flask(__name__)
 
@@ -32,7 +33,21 @@ if not FLASK_SECRET_KEY:
 # Flask 앱 시크릿 키 설정
 app.secret_key = FLASK_SECRET_KEY
 
-# 공덱 데이터 (샘플 2개, 나머지 추가 가능)
+# 데이터 로드
+# 실제 데이터는 추후 사용자가 제공할 예정
+MONSTERS_DATA = {
+    # 몬스터명 : [방덱1, 방덱2, ...]
+    "물신수": ["물신수,풍그림자,불닭", "물신수,빛용병왕,불신수"],
+    "풍그림자": ["물신수,풍그림자,불닭"],
+    "불닭": ["물신수,풍그림자,불닭"],
+    "물마도": ["물마도,풍도깨비,빛암"],
+    "풍도깨비": ["물마도,풍도깨비,빛암", "물,풍도깨비,빛암"],
+    "빛암": ["물마도,풍도깨비,빛암", "물,풍도깨비,빛암", "물신수,빛용병왕,불신수"],
+    "빛용병왕": ["물신수,빛용병왕,불신수"],
+    "불신수": ["물신수,빛용병왕,불신수"]
+}
+
+# 방덱 데이터
 DECK_DATA = {
     "물신수,풍그림자,불닭": {
         "offense": "물쿠키,물발,물인어",
@@ -48,11 +63,43 @@ DECK_DATA = {
         "usage": "풍도깨비를 살리는 방향. 상대 물속성부터 잡거나, 약한 빛암 먼저 타겟. 풍오공은 오른쪽 아티(체력 낮은 몬스터 주는 피해량 증가) 권장.",
         "suitable_defenses": ["물마도,풍도깨비,빛암", "물신수,빛용병왕,불신수", "물,풍도깨비,빛암"]
     },
-
+    "물신수,빛용병왕,불신수": {
+        "offense": "물,물,물",
+        "advantages": "물 속성 덱으로 강력한 불 속성 방어덱에 효과적",
+        "disadvantages": "풍 속성 공격에 취약함",
+        "usage": "물 속성 딜러로 불신수부터 집중 공략",
+        "suitable_defenses": ["물신수,빛용병왕,불신수", "불,불,불"]
+    },
+    "물,풍도깨비,빛암": {
+        "offense": "물,물,물",
+        "advantages": "물 속성 덱으로 풍도깨비와 빛암 견제 가능",
+        "disadvantages": "물 몬스터가 약하면 어려움",
+        "usage": "물 속성 딜러로 빛암부터 처리",
+        "suitable_defenses": ["물,풍도깨비,빛암", "불,불,불"]
+    }
 }
 
 def normalize(text):
+    """텍스트 정규화: 공백 제거 및 소문자화"""
     return text.replace(" ", "").lower()
+
+def find_decks_with_monster(monster_name):
+    """몬스터 이름으로 방덱 찾기"""
+    normalized_name = normalize(monster_name)
+    found_decks = MONSTERS_DATA.get(normalized_name, [])
+    return found_decks
+
+def get_offense_recommendations(defense_deck):
+    """방덱에 대한 공덱 추천 정보 찾기"""
+    deck_info = DECK_DATA.get(defense_deck)
+    if not deck_info:
+        return None
+    return deck_info
+
+@app.route("/", methods=["GET"])
+def home():
+    """기본 홈페이지"""
+    return "서머너즈워 점령전 공덱 추천 봇이 실행 중입니다."
 
 @app.route("/login/kakao")
 def kakao_login():
@@ -127,64 +174,97 @@ def get_kakao_user_info(access_token):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    """카카오톡 웹훅 처리"""
+    # 요청 데이터 파싱
     data = request.get_json()
-    user_msg = data.get("message", {}).get("text", "")
-    chat_id = data.get("chat_id")
-
-    if user_msg.startswith("!공덱"):
-        defense_deck = normalize(user_msg.replace("!공덱", "").strip())
-        deck_info = DECK_DATA.get(defense_deck)
-        if deck_info:
-            reply = (
-                f"추천 공덱: {deck_info['offense']}\n"
-                f"장점: {deck_info['advantages']}\n"
-                f"단점: {deck_info['disadvantages']}\n"
-                f"사용법: {deck_info['usage']}"
-            )
-        else:
-            reply = "해당 방덱에 맞는 공덱을 찾을 수 없습니다."
-        send_message(chat_id, reply)
-        return jsonify({"status": "ok"})
-    return jsonify({"status": "ignored"})
-
-def send_message(chat_id, text):
-    """카카오톡 메시지를 발송합니다. (챗봇 API용 토큰 사용 필요)"""
-    # 중요: 메시지 발송에는 별도의 어드민 키 또는 서비스 앱 토큰이 필요할 수 있습니다.
-    # 로그인 통해 얻은 사용자 토큰으로 메시지를 보낼 수 있는지 확인 필요.
-    # 일반적으로는 카카오 디벨로퍼스의 어드민 키 등을 환경 변수로 설정하여 사용합니다.
-    if not KAKAO_BOT_ADMIN_KEY:
-        print("경고: 메시지 발송을 위한 KAKAO_BOT_ADMIN_KEY 환경 변수가 설정되지 않았습니다.")
-        return
-
-    headers = {"Authorization": f"Bearer {KAKAO_BOT_ADMIN_KEY}"} # <--- 발송용 토큰 사용
-    # API 엔드포인트 확인 필요 (예: https://kapi.kakao.com/v2/api/talk/memo/default/send 등)
-    # payload 형식도 API 문서 확인 필요
-    message_api_url = f"{KAKAO_API_URL}/v2/api/talk/memo/default/send" # 예시 URL (기본: 나에게 보내기)
-
-    # 실제 메시지 페이로드 구성 (API 문서 참조)
-    payload = {
-        "template_object": {
-            "object_type": "text",
-            "text": text,
-            "link": {
-                "web_url": " ", # 웹 링크 (필요시)
-                "mobile_web_url": " " # 모바일 웹 링크 (필요시)
-            },
-            "button_title": "" # 버튼 제목 (필요시)
-        }
-    }
-    # 만약 특정 채팅방 ID로 보내는 API라면 payload 구조가 다를 수 있음
-    # payload = {"receiver_uuids": f'["{chat_id}"]', "template_object": ...} # 예시 (친구에게 보내기 등)
-
-    print(f"메시지 발송 요청: URL={message_api_url}, Headers={headers}, Payload={payload}")
+    
+    # 카카오톡 오픈채팅방 요청 검증 및 처리
     try:
-        response = requests.post(message_api_url, json=payload, headers=headers)
-        response.raise_for_status()
-        print(f"메시지 발송 성공: {response.json()}")
-    except requests.exceptions.RequestException as e:
-        print(f"메시지 발송 실패: {e}")
-        print(f"응답 내용: {response.text if 'response' in locals() else 'N/A'}")
+        # 카카오톡은 type과 content 형태로 전송
+        if 'type' in data and data['type'] == 'message':
+            user_msg = data.get('content', '')
+            room_id = data.get('room', {}).get('id', '')
+            user_id = data.get('user', {}).get('id', '')
+            
+            # !몬스터 명령어 처리
+            if user_msg.startswith("!몬스터"):
+                monster_name = user_msg.replace("!몬스터", "").strip()
+                if not monster_name:
+                    return jsonify({"message": "몬스터 이름을 입력해주세요. 예: !몬스터 물신수"})
+                
+                defense_decks = find_decks_with_monster(monster_name)
+                
+                if not defense_decks:
+                    return jsonify({
+                        "message": f"'{monster_name}' 몬스터가 포함된 방덱을 찾을 수 없습니다."
+                    })
+                
+                # 응답 메시지 생성
+                response = f"'{monster_name}' 몬스터가 포함된 방덱 및 추천 공덱:\n\n"
+                
+                for deck in defense_decks:
+                    offense_info = get_offense_recommendations(deck)
+                    if offense_info:
+                        response += f"방덱: {deck}\n"
+                        response += f"추천 공덱: {offense_info['offense']}\n"
+                        response += f"장점: {offense_info['advantages']}\n"
+                        response += f"단점: {offense_info['disadvantages']}\n"
+                        response += f"사용법: {offense_info['usage']}\n\n"
+                
+                return jsonify({"message": response})
+            
+            # !공덱 명령어 처리 (기존 기능 유지)
+            elif user_msg.startswith("!공덱"):
+                defense_deck = normalize(user_msg.replace("!공덱", "").strip())
+                if not defense_deck:
+                    return jsonify({"message": "방덱을 입력해주세요. 예: !공덱 물신수,풍그림자,불닭"})
+                
+                deck_info = get_offense_recommendations(defense_deck)
+                
+                if deck_info:
+                    response = (
+                        f"방덱: {defense_deck}\n"
+                        f"추천 공덱: {deck_info['offense']}\n"
+                        f"장점: {deck_info['advantages']}\n"
+                        f"단점: {deck_info['disadvantages']}\n"
+                        f"사용법: {deck_info['usage']}"
+                    )
+                else:
+                    response = f"'{defense_deck}' 방덱에 맞는 공덱을 찾을 수 없습니다."
+                
+                return jsonify({"message": response})
+            
+            # !도움말 명령어 처리
+            elif user_msg == "!도움말":
+                help_text = (
+                    "서머너즈워 점령전 공덱 추천 봇 사용법:\n\n"
+                    "1. !몬스터 [몬스터명] - 해당 몬스터가 포함된 방덱과 추천 공덱 확인\n"
+                    "예: !몬스터 물신수\n\n"
+                    "2. !공덱 [방덱구성] - 해당 방덱에 대한 추천 공덱 확인\n"
+                    "예: !공덱 물신수,풍그림자,불닭\n\n"
+                    "3. !도움말 - 사용 방법 확인"
+                )
+                return jsonify({"message": help_text})
+        
+        # 카카오톡 서버 검증 응답
+        return jsonify({"message": "success"})
+    
+    except Exception as e:
+        print(f"오류 발생: {e}")
+        return jsonify({"message": "오류가 발생했습니다. 다시 시도해주세요."})
 
+# 데이터 로드 함수 (향후 파일에서 데이터 로드 시 사용)
+def load_data_from_file(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as file:
+            return json.load(file)
+    except Exception as e:
+        print(f"데이터 파일 로드 실패: {e}")
+        return {}
+
+# 앱 실행 설정
 if __name__ == "__main__":
-    # 디버그 모드 활성화, SSL 필요시 설정 추가 가능
-    app.run(host="0.0.0.0", port=8080, debug=True)
+    # 기본 포트 설정 (환경 변수 PORT가 없으면 8080 사용)
+    port = int(os.environ.get("PORT", 8080))
+    # 모든 인터페이스에서 접속 허용, 디버그 모드 비활성화
+    app.run(host="0.0.0.0", port=port, debug=False)
